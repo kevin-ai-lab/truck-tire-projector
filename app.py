@@ -1,17 +1,3 @@
-Here is the completely updated and optimized code.
-
-### 🚀 What was fixed and improved in this version:
-
-1. **✅ Plotly 6.0 Fix Applied:** The deprecated `titlefont` dictionary was correctly nested inside the `title` dictionary to comply with Plotly's newest layout syntax. This permanently prevents the crash you experienced.
-2. **📅 Shifted to Monthly Granularity (2026 Projection):** The data engine was completely rewritten. It now synthetically translates historical annual data into a monthly time-series ending in December 2025. The model utilizes **Holt-Winters Seasonal Smoothing** to project January 2026 through December 2026 month-by-month.
-3. **⚙️ Mathematical Optimization for Monthly Rates:** Replacement tire assumptions (RT) are normally measured annually (e.g., 4.5 tires/year). The code now mathematically translates this into a Monthly Run Rate (`annual_rate / 12`) so the volumetric charts accurately reflect monthly demand rather than blowing the numbers out of proportion.
-4. **📊 Apples-to-Apples Comparisons:** The KPI summary cards now intelligently compare the aggregated sum of the 12 projected months of 2026 against the historical 12 months of 2025, providing a much clearer annualized business view.
-
-### 💻 Updated Code (`app.py`)
-
-Copy and paste this completely over your current `app.py` file, commit it, and push it to GitHub. Streamlit Cloud will automatically update your live app within 30 to 60 seconds!
-
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -193,10 +179,16 @@ def main():
     st.subheader("📊 Annual Projected Totals (2026 vs 2025)")
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("2026 Total Tire Demand", f"{tot_26:.2f}M", f"{((tot_26/tot_25)-1)*100:.1f}% vs 2025")
-    col2.metric("2026 Total OE Tires", f"{oe_26:.2f}M", f"{((oe_26/oe_25)-1)*100:.1f}% vs 2025")
-    col3.metric("2026 Total RT Tires", f"{rt_26:.2f}M", f"{((rt_26/rt_25)-1)*100:.1f}% vs 2025")
-    col4.metric("EOY Active Fleet (VIO)", f"{vio_26:.2f}M", f"{((vio_26/vio_25)-1)*100:.1f}% vs 2025")
+    # Ensure safe division
+    tot_pct = f"{((tot_26/tot_25)-1)*100:.1f}%" if tot_25 else "N/A"
+    oe_pct = f"{((oe_26/oe_25)-1)*100:.1f}%" if oe_25 else "N/A"
+    rt_pct = f"{((rt_26/rt_25)-1)*100:.1f}%" if rt_25 else "N/A"
+    vio_pct = f"{((vio_26/vio_25)-1)*100:.1f}%" if vio_25 else "N/A"
+    
+    col1.metric("2026 Total Tire Demand", f"{tot_26:.2f}M", f"{tot_pct} vs 2025")
+    col2.metric("2026 Total OE Tires", f"{oe_26:.2f}M", f"{oe_pct} vs 2025")
+    col3.metric("2026 Total RT Tires", f"{rt_26:.2f}M", f"{rt_pct} vs 2025")
+    col4.metric("EOY Active Fleet (VIO)", f"{vio_26:.2f}M", f"{vio_pct} vs 2025")
 
     st.divider()
     
@@ -243,7 +235,7 @@ def main():
             yaxis='y2'
         ))
         
-        # ✅ PLOTLY 6.0 FIX APPLIED HERE: Nested dicts for title and font
+        # Plotly 6.0 valid layout
         fig2.update_layout(
             hovermode="x unified",
             xaxis=dict(title=""),
@@ -283,5 +275,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-```
