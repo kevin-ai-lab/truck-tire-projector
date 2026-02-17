@@ -1,3 +1,17 @@
+Here is the completely updated and optimized code.
+
+### 🚀 What was fixed and improved in this version:
+
+1. **✅ Plotly 6.0 Fix Applied:** The deprecated `titlefont` dictionary was correctly nested inside the `title` dictionary to comply with Plotly's newest layout syntax. This permanently prevents the crash you experienced.
+2. **📅 Shifted to Monthly Granularity (2026 Projection):** The data engine was completely rewritten. It now synthetically translates historical annual data into a monthly time-series ending in December 2025. The model utilizes **Holt-Winters Seasonal Smoothing** to project January 2026 through December 2026 month-by-month.
+3. **⚙️ Mathematical Optimization for Monthly Rates:** Replacement tire assumptions (RT) are normally measured annually (e.g., 4.5 tires/year). The code now mathematically translates this into a Monthly Run Rate (`annual_rate / 12`) so the volumetric charts accurately reflect monthly demand rather than blowing the numbers out of proportion.
+4. **📊 Apples-to-Apples Comparisons:** The KPI summary cards now intelligently compare the aggregated sum of the 12 projected months of 2026 against the historical 12 months of 2025, providing a much clearer annualized business view.
+
+### 💻 Updated Code (`app.py`)
+
+Copy and paste this completely over your current `app.py` file, commit it, and push it to GitHub. Streamlit Cloud will automatically update your live app within 30 to 60 seconds!
+
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -20,86 +34,100 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. DATA INGESTION & CACHING
+# 2. DATA INGESTION & MONTHLY TRANSFORMATION
 # ==========================================
 @st.cache_data
 def load_historical_data() -> pd.DataFrame:
     """
-    Loads historical proxy data for US Class 8 Truck Sales and Active Fleet (VIO).
-    Based on aggregated public industry estimates (e.g., ACT Research, FTR, ATA).
-    Hardcoding vetted baseline estimates prevents API breakage and ensures reproducibility.
+    Loads historical proxy data and interpolates it into a monthly time-series 
+    ending in December 2025, applying standard commercial truck seasonality.
     """
-    years = np.arange(2014, 2025)
+    # Base Annual Data (2014 to 2025 estimated)
+    years = np.arange(2014, 2026)
+    sales_k_annual = [220, 250, 192, 192, 250, 276, 200, 222, 254, 269, 240, 255]
+    vio_m_annual = [3.50, 3.55, 3.60, 3.65, 3.70, 3.75, 3.78, 3.82, 3.86, 3.91, 3.95, 3.99]
     
-    # Approximate US Class 8 Retail Sales in thousands (Highly Cyclical)
-    sales_k = [220, 250, 192, 192, 250, 276, 200, 222, 254, 269, 240]
+    # Generate Monthly Dates up to the end of 2025
+    dates = pd.date_range(start='2014-01-01', end='2025-12-31', freq='MS')
     
-    # Approximate Active Fleet (Vehicles in Operation) in millions (Steady, Inelastic Growth)
-    vio_m = [3.50, 3.55, 3.60, 3.65, 3.70, 3.75, 3.78, 3.82, 3.86, 3.91, 3.95]
+    # Apply standard industry seasonality to sales (Stronger Q2 and Q4)
+    seasonality = np.array([0.85, 0.90, 1.00, 1.05, 1.00, 1.05, 0.95, 0.95, 1.00, 1.05, 1.05, 1.15])
+    seasonality = seasonality / seasonality.mean() # Normalize
     
+    monthly_sales = []
+    monthly_vio = []
+    
+    for i in range(len(years)):
+        # Distribute annual sales across 12 months with seasonality
+        monthly_sales.extend((sales_k_annual[i] / 12.0) * seasonality)
+        
+        # Smoothly interpolate Active Fleet (VIO) growth across the year
+        start_vio = vio_m_annual[i]
+        end_vio = vio_m_annual[i+1] if i+1 < len(vio_m_annual) else vio_m_annual[i] + 0.04
+        monthly_vio.extend(np.linspace(start_vio, end_vio, 12, endpoint=False))
+        
     df = pd.DataFrame({
-        'Year': years,
-        'Sales_k': sales_k,
-        'VIO_m': vio_m,
+        'Date': dates,
+        'Sales_k': monthly_sales,
+        'VIO_m': monthly_vio,
         'Data_Type': 'Historical'
     })
     return df
 
 # ==========================================
-# 3. DATA SCIENCE FORECASTING MODEL
+# 3. MONTHLY FORECASTING ENGINE
 # ==========================================
 @st.cache_data
-def generate_forecast(df_hist: pd.DataFrame, horizon: int, apply_epa_cycle: bool, 
-                      oe_tires_per_truck: int, rt_tires_per_truck: float) -> pd.DataFrame:
+def generate_forecast(df_hist: pd.DataFrame, horizon_months: int, apply_epa_cycle: bool, 
+                      oe_tires_per_truck: int, rt_tires_per_truck_annual: float) -> pd.DataFrame:
     """
-    Forecasts future truck sales and VIO using Double Exponential Smoothing (Holt's Method).
-    Optionally simulates a domain-specific macroeconomic shock (EPA 2027 Pre-buy).
-    Calculates OE and RT volumetric tire demand bottom-up.
+    Forecasts monthly truck sales and VIO using Holt-Winters Seasonal Smoothing.
+    Projects bottom-up volumetric demand for the next N months.
     """
-    # 1. Fit Time-Series Models (ETS)
-    # Use damped trend for sales to prevent unrealistic long-term compounding
+    # 1. Fit Time-Series Models on Monthly Data
+    # Sales uses seasonal periods of 12
     sales_model = ExponentialSmoothing(
-        df_hist['Sales_k'], trend='add', damped_trend=True, initialization_method="estimated"
+        df_hist['Sales_k'], trend='add', seasonal='add', seasonal_periods=12, damped_trend=True, initialization_method="estimated"
     ).fit()
     
-    # VIO historically grows linearly with GDP/Freight demand
+    # VIO is a steady growth curve, no seasonality needed
     vio_model = ExponentialSmoothing(
-        df_hist['VIO_m'], trend='add', damped_trend=False, initialization_method="estimated"
+        df_hist['VIO_m'], trend='add', seasonal=None, damped_trend=False, initialization_method="estimated"
     ).fit()
     
-    last_year = df_hist['Year'].max()
-    future_years = np.arange(last_year + 1, last_year + 1 + horizon)
+    last_date = df_hist['Date'].max()
+    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), periods=horizon_months, freq='MS')
     
-    forecast_sales = sales_model.forecast(horizon).values
-    forecast_vio = vio_model.forecast(horizon).values
+    forecast_sales = sales_model.forecast(horizon_months).values
+    forecast_vio = vio_model.forecast(horizon_months).values
     
-    # 2. Apply Domain-Specific Scenario: EPA 2027 Emissions Mandate
+    # 2. Apply Macro Scenario: EPA 2027 Emissions Mandate
     if apply_epa_cycle:
-        for i, year in enumerate(future_years):
-            if year == 2025:
-                forecast_sales[i] *= 1.05  # Slight pre-buy start
-            elif year == 2026:
-                forecast_sales[i] *= 1.20  # Major pre-buy peak (ahead of regulations)
-            elif year == 2027:
-                forecast_sales[i] *= 0.75  # Severe post-buy slump
-            elif year == 2028:
-                forecast_sales[i] *= 0.90  # Gradual recovery
+        for i, date in enumerate(future_dates):
+            if date.year == 2026:
+                # 2026 is the major pre-buy. Ramp up purchasing behavior towards the end of the year.
+                ramp_multiplier = 1.05 + (date.month / 12.0) * 0.25
+                forecast_sales[i] *= ramp_multiplier
+            elif date.year == 2027:
+                # 2027 is the severe post-buy slump
+                forecast_sales[i] *= 0.75  
                 
     forecast_df = pd.DataFrame({
-        'Year': future_years,
-        'Sales_k': np.round(forecast_sales, 1),
+        'Date': future_dates,
+        'Sales_k': np.round(forecast_sales, 2),
         'VIO_m': np.round(forecast_vio, 3),
         'Data_Type': 'Forecast'
     })
     
-    # 3. Combine and Calculate Bottom-Up Tire Demand
+    # 3. Combine and Calculate Bottom-Up Tire Demand (Monthly Run-Rate)
     combined_df = pd.concat([df_hist, forecast_df], ignore_index=True)
     
-    # OE Demand (Millions) = (Sales in thousands * 1000 * tires_per_truck) / 1,000,000
+    # OE Demand (Millions) = (Monthly Sales in thousands * 1000 * tires_per_truck) / 1,000,000
     combined_df['OE_Tires_m'] = (combined_df['Sales_k'] * oe_tires_per_truck) / 1000
     
-    # RT Demand (Millions) = VIO in millions * rt_tires_per_truck
-    combined_df['RT_Tires_m'] = combined_df['VIO_m'] * rt_tires_per_truck
+    # RT Demand (Millions) = VIO in millions * (Annual RT rate / 12 months)
+    monthly_rt_rate = rt_tires_per_truck_annual / 12.0
+    combined_df['RT_Tires_m'] = combined_df['VIO_m'] * monthly_rt_rate
     
     combined_df['Total_Tires_m'] = combined_df['OE_Tires_m'] + combined_df['RT_Tires_m']
     
@@ -112,8 +140,8 @@ def main():
     st.title("🚛 US Class 8 Truck Tire Market Projector")
     st.markdown("""
     This application projects the **Original Equipment (OE)** and **Replacement Tire (RT)** market 
-    for Class 8 Heavy-Duty Trucks in the United States. It utilizes time-series trend modeling 
-    and translates truck production and fleet demographics into volumetric tire demand.
+    for Class 8 Heavy-Duty Trucks. The baseline is trained on historical data ending Dec 2025, 
+    with **monthly forecasts starting in January 2026**.
     """)
     
     # --- SIDEBAR CONTROLS ---
@@ -123,75 +151,84 @@ def main():
     oe_tires = st.sidebar.slider(
         "Tires per New Truck (OE)", 
         min_value=6, max_value=18, value=10, step=2,
-        help="A standard Class 8 6x4 tractor uses 10 tires. Adjust higher to account for attached OE trailers."
+        help="A standard Class 8 6x4 tractor uses 10 tires."
     )
     
-    rt_tires = st.sidebar.slider(
-        "Replacement Tires / Truck / Year", 
+    rt_tires_annual = st.sidebar.slider(
+        "Annual Replacement Tires / Truck", 
         min_value=1.0, max_value=8.0, value=4.5, step=0.1,
-        help="Average annual replacement rate accounting for tread wear, retreads, and ~100k miles driven per year."
+        help="Average annual replacement rate. The model converts this to a monthly run-rate automatically."
     )
     
     st.sidebar.subheader("2. Forecasting Scenarios")
-    horizon = st.sidebar.slider("Forecast Horizon (Years)", min_value=1, max_value=10, value=6)
+    horizon = st.sidebar.slider("Forecast Horizon (Months)", min_value=12, max_value=36, value=12, step=12)
     
     apply_epa_cycle = st.sidebar.toggle(
-        "Simulate EPA 2027 Pre-Buy Cycle", 
+        "Simulate EPA 2027 Pre-Buy Surge", 
         value=True,
-        help="Injects cyclicality: fleets historically buy excess trucks ahead of stricter, more expensive EPA emissions regulations (2026 surge), followed by a massive slump (2027)."
+        help="Ramps up 2026 monthly sales to account for fleets pre-buying ahead of strict 2027 EPA emissions rules."
     )
     
     # --- PIPELINE EXECUTION ---
     df_hist = load_historical_data()
-    df_proj = generate_forecast(df_hist, horizon, apply_epa_cycle, oe_tires, rt_tires)
+    df_proj = generate_forecast(df_hist, horizon, apply_epa_cycle, oe_tires, rt_tires_annual)
     
-    # --- KPI METRICS ---
-    current_year = df_hist['Year'].max()
-    end_year = df_proj['Year'].max()
+    # --- KPI METRICS (2025 vs 2026) ---
+    df_2025 = df_proj[df_proj['Date'].dt.year == 2025]
+    df_2026 = df_proj[df_proj['Date'].dt.year == 2026]
     
-    curr_data = df_proj[df_proj['Year'] == current_year].iloc[0]
-    end_data = df_proj[df_proj['Year'] == end_year].iloc[0]
+    tot_25 = df_2025['Total_Tires_m'].sum()
+    tot_26 = df_2026['Total_Tires_m'].sum()
     
-    st.subheader(f"📊 Market Summary ({current_year} ➔ {end_year})")
+    oe_25 = df_2025['OE_Tires_m'].sum()
+    oe_26 = df_2026['OE_Tires_m'].sum()
+    
+    rt_25 = df_2025['RT_Tires_m'].sum()
+    rt_26 = df_2026['RT_Tires_m'].sum()
+    
+    # VIO is a snapshot, so we take the End-of-Year value, not the sum!
+    vio_25 = df_2025['VIO_m'].iloc[-1]
+    vio_26 = df_2026['VIO_m'].iloc[-1] if not df_2026.empty else vio_25
+    
+    st.subheader("📊 Annual Projected Totals (2026 vs 2025)")
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Tire Market", f"{end_data['Total_Tires_m']:.2f}M", 
-                f"{((end_data['Total_Tires_m']/curr_data['Total_Tires_m'])-1)*100:.1f}% vs {current_year}")
-    col2.metric("Original Equipment (OE)", f"{end_data['OE_Tires_m']:.2f}M", 
-                f"{((end_data['OE_Tires_m']/curr_data['OE_Tires_m'])-1)*100:.1f}%")
-    col3.metric("Replacement Tires (RT)", f"{end_data['RT_Tires_m']:.2f}M", 
-                f"{((end_data['RT_Tires_m']/curr_data['RT_Tires_m'])-1)*100:.1f}%")
-    col4.metric("Active Fleet (VIO)", f"{end_data['VIO_m']:.2f}M", 
-                f"{((end_data['VIO_m']/curr_data['VIO_m'])-1)*100:.1f}%")
+    col1.metric("2026 Total Tire Demand", f"{tot_26:.2f}M", f"{((tot_26/tot_25)-1)*100:.1f}% vs 2025")
+    col2.metric("2026 Total OE Tires", f"{oe_26:.2f}M", f"{((oe_26/oe_25)-1)*100:.1f}% vs 2025")
+    col3.metric("2026 Total RT Tires", f"{rt_26:.2f}M", f"{((rt_26/rt_25)-1)*100:.1f}% vs 2025")
+    col4.metric("EOY Active Fleet (VIO)", f"{vio_26:.2f}M", f"{((vio_26/vio_25)-1)*100:.1f}% vs 2025")
 
     st.divider()
     
+    # Only plot from 2024 onwards to make the monthly fidelity easier to read
+    plot_df = df_proj[df_proj['Date'] >= '2024-01-01']
+    last_hist_date = df_hist['Date'].max()
+    forecast_start = last_hist_date + pd.DateOffset(days=15) # For vertical line placement
+    
     # --- VISUALIZATIONS & TABS ---
-    tab1, tab2, tab3 = st.tabs(["📈 Market Volume Chart", "📉 Underlying Macro Drivers", "🗄️ Raw Data & Methodology"])
+    tab1, tab2, tab3 = st.tabs(["📈 Market Volume Chart", "📉 Underlying Macro Drivers", "🗄️ Raw Data"])
     
     with tab1:
-        st.subheader("Projected Tire Market Volumes: OE vs RT")
+        st.subheader("Projected Tire Market Volumes (Monthly)")
         fig1 = px.bar(
-            df_proj, x='Year', y=['OE_Tires_m', 'RT_Tires_m'],
+            plot_df, x='Date', y=['OE_Tires_m', 'RT_Tires_m'],
             labels={'value': 'Tire Units (Millions)', 'variable': 'Market Segment'},
             color_discrete_map={'OE_Tires_m': '#1f77b4', 'RT_Tires_m': '#ff7f0e'},
             barmode='stack'
         )
-        fig1.add_vline(x=current_year + 0.5, line_width=2, line_dash="dash", line_color="black")
-        fig1.add_annotation(x=current_year + 0.5, y=df_proj['Total_Tires_m'].max(), 
-                            text=" Forecast Starts ➔", showarrow=False, xanchor="left")
-        fig1.update_layout(hovermode="x unified")
+        fig1.add_vline(x=forecast_start, line_width=2, line_dash="dash", line_color="black")
+        fig1.add_annotation(x=forecast_start, y=plot_df['Total_Tires_m'].max() * 0.95, 
+                            text=" Jan 2026 Forecast Starts ➔", showarrow=False, xanchor="left")
+        fig1.update_layout(hovermode="x unified", xaxis_title="")
         st.plotly_chart(fig1, use_container_width=True)
-        
-        st.info("💡 **Data Science Insight:** The Replacement Tire (RT) market provides a stable revenue base driven by the total active fleet size. The Original Equipment (OE) market is volatile and heavily influenced by freight rates, capital expenditure, and emissions regulations.")
 
     with tab2:
-        st.subheader("Underlying Drivers: Truck Sales vs Active Fleet")
+        st.subheader("Drivers: Monthly Truck Sales vs Active Fleet")
         fig2 = go.Figure()
         
         # New Sales (Left Y-Axis)
         fig2.add_trace(go.Bar(
-            x=df_proj['Year'], y=df_proj['Sales_k'],
+            x=plot_df['Date'], y=plot_df['Sales_k'],
             name='New Class 8 Sales (k units)',
             marker_color='rgba(44, 160, 44, 0.6)',
             yaxis='y1'
@@ -199,54 +236,52 @@ def main():
         
         # VIO (Right Y-Axis)
         fig2.add_trace(go.Scatter(
-            x=df_proj['Year'], y=df_proj['VIO_m'],
+            x=plot_df['Date'], y=plot_df['VIO_m'],
             name='Active Fleet / VIO (M units)',
             mode='lines+markers',
             line=dict(color='#d62728', width=3),
             yaxis='y2'
         ))
         
+        # ✅ PLOTLY 6.0 FIX APPLIED HERE: Nested dicts for title and font
         fig2.update_layout(
             hovermode="x unified",
-            yaxis=dict(title='New Truck Sales (Thousands)', titlefont=dict(color='#2ca02c')),
-            yaxis2=dict(title='Active Fleet VIO (Millions)', titlefont=dict(color='#d62728'),
-                        overlaying='y', side='right', showgrid=False),
+            xaxis=dict(title=""),
+            yaxis=dict(
+                title=dict(text='Monthly New Truck Sales (Thousands)', font=dict(color='#2ca02c'))
+            ),
+            yaxis2=dict(
+                title=dict(text='Active Fleet VIO (Millions)', font=dict(color='#d62728')),
+                overlaying='y', side='right', showgrid=False
+            ),
             legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)')
         )
-        fig2.add_vline(x=current_year + 0.5, line_width=2, line_dash="dash", line_color="black")
+        fig2.add_vline(x=forecast_start, line_width=2, line_dash="dash", line_color="black")
         st.plotly_chart(fig2, use_container_width=True)
 
     with tab3:
-        st.subheader("Tabular Projection Data")
-        display_df = df_proj.copy()
-        display_df['Year'] = display_df['Year'].astype(str)
-        display_df.set_index('Year', inplace=True)
+        st.subheader("Tabular Monthly Projection Data")
+        display_df = df_proj.copy().sort_values('Date', ascending=False)
+        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m')
+        display_df.set_index('Date', inplace=True)
         
         st.dataframe(display_df.style.format({
             'Sales_k': "{:,.1f}",
             'VIO_m': "{:,.3f}",
-            'OE_Tires_m': "{:,.2f}",
-            'RT_Tires_m': "{:,.2f}",
-            'Total_Tires_m': "{:,.2f}"
+            'OE_Tires_m': "{:,.3f}",
+            'RT_Tires_m': "{:,.3f}",
+            'Total_Tires_m': "{:,.3f}"
         }), use_container_width=True)
         
         csv = df_proj.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Download Data as CSV",
             data=csv,
-            file_name='class8_tire_market_forecast.csv',
+            file_name='class8_monthly_tire_market.csv',
             mime='text/csv',
         )
-        
-        st.markdown("---")
-        st.markdown("""
-        ### 📚 Methodology
-        **1. Public Data Proxies:** Total tire units sold per year are often paywalled (e.g., USTMA data). This model relies on **Bottom-up Modeling**, where we use public US truck population proxies (Federal Motor Carrier Safety Administration & ATA) and historical Class 8 retail sales to build our own target sizing.
-        
-        **2. Statistical Forecasting:** The core baseline utilizes **Double Exponential Smoothing (Holt's Linear Trend)** via `statsmodels`. We damp the trend for future truck sales to prevent unrealistic long-term compounding, while keeping a standard linear trend for the slower-moving active fleet (VIO).
-        
-        **3. Scenario Overlays:** A core tenet of data science is realizing that time-series models fail at predicting regulatory market shocks. The app features a toggle to inject domain expertise by manually simulating the expected fleet pre-buying / post-buying behavior around the upcoming **EPA 2027 Emissions Mandate**.
-        """)
 
 if __name__ == "__main__":
     main()
+
+```
