@@ -206,13 +206,17 @@ def main():
             yaxis='y2'
         ))
         
-        fig2.update_layout(
-            hovermode="x unified",
-            yaxis=dict(title='New Truck Sales (Thousands)', titlefont=dict(color='#2ca02c')),
-            yaxis2=dict(title='Active Fleet VIO (Millions)', titlefont=dict(color='#d62728'),
-                        overlaying='y', side='right', showgrid=False),
-            legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)')
-        )
+      fig2.update_layout(
+    hovermode="x unified",
+    yaxis=dict(
+        title=dict(text='New Truck Sales (Thousands)', font=dict(color='#2ca02c'))
+    ),
+    yaxis2=dict(
+        title=dict(text='Active Fleet VIO (Millions)', font=dict(color='#d62728')),
+        overlaying='y', side='right', showgrid=False
+    ),
+    legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)')
+)
         fig2.add_vline(x=current_year + 0.5, line_width=2, line_dash="dash", line_color="black")
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -250,3 +254,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
